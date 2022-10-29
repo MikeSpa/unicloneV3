@@ -106,7 +106,7 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         );
 
         vm.expectRevert(encodeError("InvalidTickRange()"));
-        pool.mint(address(this), -887273, 0, 0);
+        pool.mint(address(this), -887273, 0, 0, "");
     }
 
     function testMintInvalidTickRangeUpper() public {
@@ -118,7 +118,7 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         );
 
         vm.expectRevert(encodeError("InvalidTickRange()"));
-        pool.mint(address(this), 0, 887273, 0);
+        pool.mint(address(this), 0, 887273, 0, "");
     }
 
     function testMintInvalidTickRange() public {
@@ -130,7 +130,7 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         );
 
         vm.expectRevert(encodeError("InvalidTickRange()"));
-        pool.mint(address(this), 1, 0, 0);
+        pool.mint(address(this), 1, 0, 0, "");
     }
 
     function testMintZeroLiquidity() public {
@@ -142,10 +142,10 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         );
 
         vm.expectRevert(encodeError("ZeroLiquidity()"));
-        pool.mint(address(this), 0, 1, 0);
+        pool.mint(address(this), 0, 1, 0, "");
 
         vm.expectRevert(encodeError("ZeroLiquidity()"));
-        pool.mint(address(this), 0, 1, 0);
+        pool.mint(address(this), 0, 1, 0, "");
     }
 
     function testMintInsufficientTokenBalance() public {
@@ -169,7 +169,8 @@ contract UnicloneV3PoolTest is Test, TestUtils {
             address(this),
             params.lowerTick,
             params.upperTick,
-            params.liquidity
+            params.liquidity,
+            ""
         );
     }
 
@@ -190,10 +191,22 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         (uint256 poolBalance0, uint256 poolBalance1) = setupTestCase(params);
         int256 userBalance0Before = int256(token0.balanceOf(address(this)));
         // get 42 ETH to swap
-        token1.mint(address(this), 42 ether);
+        // token1.mint(address(this), 42 ether);
+        uint256 swapAmount = 42 ether; // 42 USDC
+        token1.mint(address(this), swapAmount);
+        token1.approve(address(this), swapAmount);
+
+        UnicloneV3Pool.CallbackData memory extra = UnicloneV3Pool.CallbackData({
+            token0: address(token0),
+            token1: address(token1),
+            payer: address(this)
+        });
 
         // do the swap
-        (int256 amount0Delta, int256 amount1Delta) = pool.swap(address(this));
+        (int256 amount0Delta, int256 amount1Delta) = pool.swap(
+            address(this),
+            abi.encode(extra)
+        );
 
         //check return of swap
         assertEq(amount0Delta, -0.008396714242162444 ether, "invalid ETH out");
@@ -251,30 +264,51 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         setupTestCase(params);
 
         vm.expectRevert(encodeError("InsufficientInputAmount()"));
-        pool.swap(address(this));
+        pool.swap(address(this), "");
     }
 
     // ##########################  CALLBACK FUNCTION  ############################
     // mint callback function
-    function unicloneV3MintCallback(uint256 amount0, uint256 amount1) public {
+    function unicloneV3MintCallback(
+        uint256 amount0,
+        uint256 amount1,
+        bytes calldata data
+    ) public {
         if (transferInMintCallback) {
-            token0.transfer(msg.sender, amount0);
-            token1.transfer(msg.sender, amount1);
+            UnicloneV3Pool.CallbackData memory extra = abi.decode(
+                data,
+                (UnicloneV3Pool.CallbackData)
+            );
+
+            IERC20(extra.token0).transferFrom(extra.payer, msg.sender, amount0);
+            IERC20(extra.token1).transferFrom(extra.payer, msg.sender, amount1);
         }
     }
 
-    function unicloneV3SwapCallback(int256 amount0, int256 amount1) public {
+    function unicloneV3SwapCallback(
+        int256 amount0,
+        int256 amount1,
+        bytes calldata data
+    ) public {
         if (transferInSwapCallback) {
-            if (
-                amount0 > 0 // && uint256(amount0) <= token0.balanceOf(msg.sender)
-            ) {
-                token0.transfer(msg.sender, uint256(amount0));
+            UnicloneV3Pool.CallbackData memory extra = abi.decode(
+                data,
+                (UnicloneV3Pool.CallbackData)
+            );
+            if (amount0 > 0) {
+                IERC20(extra.token0).transferFrom(
+                    extra.payer,
+                    msg.sender,
+                    uint256(amount0)
+                );
             }
 
-            if (
-                amount1 > 0 //&& uint256(amount1) <= token1.balanceOf(msg.sender)
-            ) {
-                token1.transfer(msg.sender, uint256(amount1));
+            if (amount1 > 0) {
+                IERC20(extra.token1).transferFrom(
+                    extra.payer,
+                    msg.sender,
+                    uint256(amount1)
+                );
             }
         }
     }
@@ -302,11 +336,21 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         );
         //provide liquidity
         if (params.mintLiqudity) {
+            token0.approve(address(this), params.wethBalance);
+            token1.approve(address(this), params.usdcBalance);
+
+            UnicloneV3Pool.CallbackData memory extra = UnicloneV3Pool
+                .CallbackData({
+                    token0: address(token0),
+                    token1: address(token1),
+                    payer: address(this)
+                });
             (poolBalance0, poolBalance1) = pool.mint(
                 address(this),
                 params.lowerTick,
                 params.upperTick,
-                params.liquidity
+                params.liquidity,
+                abi.encode(extra)
             );
         }
     }

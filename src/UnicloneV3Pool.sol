@@ -29,6 +29,12 @@ contract UnicloneV3Pool {
     }
     Slot0 public slot0;
 
+    struct CallbackData {
+        address token0;
+        address token1;
+        address payer;
+    }
+
     // Amount of liquidity, L.
     uint128 public liquidity;
 
@@ -80,7 +86,8 @@ contract UnicloneV3Pool {
         address _owner,
         int24 _lowerTick, //bounds of price range
         int24 _upperTick,
-        uint128 _amount //L
+        uint128 _amount, //L
+        bytes calldata data
     ) external returns (uint256 amount0, uint256 amount1) {
         if (
             _lowerTick >= _upperTick ||
@@ -118,7 +125,8 @@ contract UnicloneV3Pool {
         //caller msg.sender callback function where the token will be transfer to us
         IUnicloneV3MintCallback(msg.sender).unicloneV3MintCallback(
             amount0,
-            amount1
+            amount1,
+            data
         );
         // check that the balance has increase by at least amount0 and amount1
         if (amount0 > 0 && balance0Before + amount0 > balance0())
@@ -139,7 +147,7 @@ contract UnicloneV3Pool {
     }
 
     // _recipient: the address that should recieve the token
-    function swap(address _recipient)
+    function swap(address _recipient, bytes calldata data)
         public
         returns (int256 amount0, int256 amount1)
     {
@@ -160,7 +168,8 @@ contract UnicloneV3Pool {
         uint256 balance1Before = balance1();
         IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
             amount0,
-            amount1
+            amount1,
+            data
         );
         // check the pool balance is correct
         if (balance1Before + uint256(amount1) > balance1())
