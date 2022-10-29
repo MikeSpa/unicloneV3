@@ -51,6 +51,18 @@ contract UnicloneV3Pool {
         uint256 amount1
     );
 
+    event Swap(
+        address indexed sender,
+        address indexed recipient,
+        int256 amount0,
+        int256 amount1,
+        uint160 sqrtPriceX96,
+        uint128 liquidity,
+        int24 tick
+    );
+
+    //##########################  FUNCTIONs  ######################################
+
     constructor(
         address _token0,
         address _token1,
@@ -123,6 +135,46 @@ contract UnicloneV3Pool {
             _amount,
             amount0,
             amount1
+        );
+    }
+
+    // _recipient: the address that should recieve the token
+    function swap(address _recipient)
+        public
+        returns (int256 amount0, int256 amount1)
+    {
+        // Find target price and tick
+        //hardcoded for now
+        int24 nextTick = 85184;
+        uint160 nextPrice = 5604469350942327889444743441197;
+
+        amount0 = -0.008396714242162444 ether;
+        amount1 = 42 ether;
+
+        // Update tick and sqrtP
+        (slot0.tick, slot0.sqrtPriceX96) = (nextTick, nextPrice);
+
+        // Token exchange
+        IERC20(token0).transfer(_recipient, uint256(-amount0));
+
+        uint256 balance1Before = balance1();
+        IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
+            amount0,
+            amount1
+        );
+        // check the pool balance is correct
+        if (balance1Before + uint256(amount1) > balance1())
+            revert InsufficientInputAmount();
+
+        // Emit event
+        emit Swap(
+            msg.sender,
+            _recipient,
+            amount0,
+            amount1,
+            slot0.sqrtPriceX96,
+            liquidity,
+            slot0.tick
         );
     }
 
