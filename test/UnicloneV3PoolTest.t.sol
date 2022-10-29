@@ -5,13 +5,14 @@ import "forge-std/Test.sol";
 
 import "./ERC20Mintable.sol";
 import "../src/UnicloneV3Pool.sol";
+import "./TestUtils.sol";
 
-contract UnicloneV3PoolTest is Test {
+contract UnicloneV3PoolTest is Test, TestUtils {
     ERC20Mintable token0;
     ERC20Mintable token1;
     UnicloneV3Pool pool;
 
-    bool shouldTransferInCallback = false;
+    bool transferInMintCallback = false;
 
     struct TestCaseParams {
         uint256 wethBalance;
@@ -21,7 +22,7 @@ contract UnicloneV3PoolTest is Test {
         int24 upperTick;
         uint128 liquidity;
         uint160 currentSqrtP;
-        bool shouldTransferInCallback;
+        bool transferInMintCallback;
         bool mintLiqudity;
     }
 
@@ -33,10 +34,6 @@ contract UnicloneV3PoolTest is Test {
 
     // test provide liquidity
     function testMintSuccess() public {
-        uint256 one = 1;
-        uint256 two = 2;
-        // assertEq(one, two, "nope");
-
         TestCaseParams memory params = TestCaseParams({
             wethBalance: 1 ether,
             usdcBalance: 5000 ether,
@@ -45,7 +42,7 @@ contract UnicloneV3PoolTest is Test {
             upperTick: 86129,
             liquidity: 1517882343751509868544,
             currentSqrtP: 5602277097478614198912276234240,
-            shouldTransferInCallback: true,
+            transferInMintCallback: true,
             mintLiqudity: true
         });
         //provide liquidity
@@ -97,9 +94,84 @@ contract UnicloneV3PoolTest is Test {
         );
     }
 
+    function testMintInvalidTickRangeLower() public {
+        pool = new UnicloneV3Pool(
+            address(token0),
+            address(token1),
+            uint160(1),
+            0
+        );
+
+        vm.expectRevert(encodeError("InvalidTickRange()"));
+        pool.mint(address(this), -887273, 0, 0);
+    }
+
+    function testMintInvalidTickRangeUpper() public {
+        pool = new UnicloneV3Pool(
+            address(token0),
+            address(token1),
+            uint160(1),
+            0
+        );
+
+        vm.expectRevert(encodeError("InvalidTickRange()"));
+        pool.mint(address(this), 0, 887273, 0);
+    }
+
+    function testMintInvalidTickRange() public {
+        pool = new UnicloneV3Pool(
+            address(token0),
+            address(token1),
+            uint160(1),
+            0
+        );
+
+        vm.expectRevert(encodeError("InvalidTickRange()"));
+        pool.mint(address(this), 1, 0, 0);
+    }
+
+    function testMintZeroLiquidity() public {
+        pool = new UnicloneV3Pool(
+            address(token0),
+            address(token1),
+            uint160(1),
+            0
+        );
+
+        vm.expectRevert(encodeError("ZeroLiquidity()"));
+        pool.mint(address(this), 0, 1, 0);
+
+        vm.expectRevert(encodeError("ZeroLiquidity()"));
+        pool.mint(address(this), 0, 1, 0);
+    }
+
+    function testMintInsufficientTokenBalance() public {
+        TestCaseParams memory params = TestCaseParams({
+            wethBalance: 0,
+            usdcBalance: 0,
+            currentTick: 85176,
+            lowerTick: 84222,
+            upperTick: 86129,
+            liquidity: 1517882343751509868544,
+            currentSqrtP: 5602277097478614198912276234240,
+            transferInMintCallback: false,
+            mintLiqudity: false
+        });
+
+        setupTestCase(params);
+
+        vm.expectRevert(encodeError("InsufficientInputAmount()"));
+        pool.mint(
+            address(this),
+            params.lowerTick,
+            params.upperTick,
+            params.liquidity
+        );
+    }
+
     // mint callback function
     function unicloneV3MintCallback(uint256 amount0, uint256 amount1) public {
-        if (shouldTransferInCallback) {
+        if (transferInMintCallback) {
             token0.transfer(msg.sender, amount0);
             token1.transfer(msg.sender, amount1);
         }
@@ -110,7 +182,7 @@ contract UnicloneV3PoolTest is Test {
         internal
         returns (uint256 poolBalance0, uint256 poolBalance1)
     {
-        shouldTransferInCallback = params.shouldTransferInCallback;
+        transferInMintCallback = params.transferInMintCallback;
         //mint token
         token0.mint(address(this), params.wethBalance);
         token1.mint(address(this), params.usdcBalance);
