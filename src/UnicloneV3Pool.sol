@@ -16,7 +16,7 @@ contract UnicloneV3Pool {
     int24 internal constant MIN_TICK = -887272;
     int24 internal constant MAX_TICK = -MIN_TICK;
 
-    // Pool tokens, immutable
+    // Pool tokens
     address public immutable token0;
     address public immutable token1;
 
@@ -32,9 +32,9 @@ contract UnicloneV3Pool {
     // Amount of liquidity, L.
     uint128 public liquidity;
 
-    // Ticks info
+    // Ticks info: # -> (bool initialized, uint128 L)
     mapping(int24 => Tick.Info) public ticks;
-    // Positions info
+    // Positions info: hash(owner, lowerTick, upperTick)-> L
     mapping(bytes32 => Position.Info) public positions;
 
     error InsufficientInputAmount();
@@ -52,81 +52,86 @@ contract UnicloneV3Pool {
     );
 
     constructor(
-        address token0_,
-        address token1_,
-        uint160 sqrtPriceX96,
-        int24 tick
+        address _token0,
+        address _token1,
+        uint160 _sqrtPriceX96,
+        int24 _tick
     ) {
-        token0 = token0_;
-        token1 = token1_;
+        token0 = _token0;
+        token1 = _token1;
 
-        slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick});
+        slot0 = Slot0({sqrtPriceX96: _sqrtPriceX96, tick: _tick});
     }
 
     // provide liquidity
     function mint(
-        address owner,
-        int24 lowerTick, //bounds of price range
-        int24 upperTick,
-        uint128 amount, //L
-        bytes calldata data
+        address _owner,
+        int24 _lowerTick, //bounds of price range
+        int24 _upperTick,
+        uint128 _amount //L
     ) external returns (uint256 amount0, uint256 amount1) {
         if (
-            lowerTick >= upperTick ||
-            lowerTick < MIN_TICK ||
-            upperTick > MAX_TICK
+            _lowerTick >= _upperTick ||
+            _lowerTick < MIN_TICK ||
+            _upperTick > MAX_TICK
         ) revert InvalidTickRange();
 
-        if (amount == 0) revert ZeroLiquidity();
+        if (_amount == 0) revert ZeroLiquidity();
 
-        //update ticks and positions mappings
-        ticks.update(lowerTick, amount);
-        ticks.update(upperTick, amount);
+        // Update ticks and positions mappings
+        ticks.update(_lowerTick, _amount);
+        ticks.update(_upperTick, _amount);
 
         Position.Info storage position = positions.get(
-            owner,
-            lowerTick,
-            upperTick
+            _owner,
+            _lowerTick,
+            _upperTick
         );
-        position.update(amount);
+        position.update(_amount);
 
-        //calculate the amounts the user has to deposit
+        // Calculate the amounts the user has to deposit
         //hardcoded for now
         amount0 = 0.998976618347425280 ether;
         amount1 = 5000 ether;
 
-        //update liquidity
-        liquidity += uint128(amount);
+        // Update liquidity
+        liquidity += uint128(_amount);
 
+        // Check token transfer
+        //current token balance
         uint256 balance0Before;
         uint256 balance1Before;
         if (amount0 > 0) balance0Before = balance0();
         if (amount1 > 0) balance1Before = balance1();
+        //caller msg.sender callback function where the token will be transfer to us
         IUnicloneV3MintCallback(msg.sender).unicloneV3MintCallback(
             amount0,
-            amount1,
-            data
+            amount1
         );
+        // check that the balance has increase by at least amount0 and amount1
         if (amount0 > 0 && balance0Before + amount0 > balance0())
             revert InsufficientInputAmount();
         if (amount1 > 0 && balance1Before + amount1 > balance1())
             revert InsufficientInputAmount();
 
+        // Emit event
         emit Mint(
             msg.sender,
-            owner,
-            lowerTick,
-            upperTick,
-            amount,
+            _owner,
+            _lowerTick,
+            _upperTick,
+            _amount,
             amount0,
             amount1
         );
     }
 
+    //return the balance of token0 on the contract
     function balance0() internal returns (uint256 balance) {
         balance = IERC20(token0).balanceOf(address(this));
     }
 
+    //return the balance of token1 on the contract
     function balance1() internal returns (uint256 balance) {
         balance = IERC20(token1).balanceOf(address(this));
     }
