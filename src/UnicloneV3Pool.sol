@@ -7,11 +7,15 @@ import "./interfaces/IUnicloneV3SwapCallback.sol";
 
 import "./lib/Position.sol";
 import "./lib/Tick.sol";
+import "./lib/TickBitmap.sol";
 
 contract UnicloneV3Pool {
     using Tick for mapping(int24 => Tick.Info);
     using Position for mapping(bytes32 => Position.Info);
     using Position for Position.Info;
+
+    using TickBitmap for mapping(int16 => uint256);
+    mapping(int16 => uint256) public tickBitmap;
 
     int24 internal constant MIN_TICK = -887272;
     int24 internal constant MAX_TICK = -MIN_TICK;
@@ -186,6 +190,8 @@ contract UnicloneV3Pool {
             slot0.tick
         );
     }
+
+    // ############################### PRIVATE AND INTERNAL ############################
 
     //return the balance of token0 on the contract
     function balance0() internal returns (uint256 balance) {
