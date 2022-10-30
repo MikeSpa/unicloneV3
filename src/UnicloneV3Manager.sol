@@ -21,8 +21,19 @@ contract UnicloneV3Manager {
         );
     }
 
-    function swap(address poolAddress_, bytes calldata data) public {
-        UnicloneV3Pool(poolAddress_).swap(msg.sender, data);
+    function swap(
+        address poolAddress_,
+        bool zeroForOne,
+        uint256 amountSpecified,
+        bytes calldata data
+    ) public returns (int256, int256) {
+        return
+            UnicloneV3Pool(poolAddress_).swap(
+                msg.sender,
+                zeroForOne,
+                amountSpecified,
+                data
+            );
     }
 
     function unicloneV3MintCallback(

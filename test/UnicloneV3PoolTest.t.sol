@@ -38,21 +38,24 @@ contract UnicloneV3PoolTest is Test, TestUtils {
     function testMintSuccess() public {
         TestCaseParams memory params = TestCaseParams({
             wethBalance: 1 ether,
-            usdcBalance: 5000 ether,
+            usdcBalance: 5001 ether,
             currentTick: 85176,
             lowerTick: 84222,
             upperTick: 86129,
             liquidity: 1517882343751509868544,
             currentSqrtP: 5602277097478614198912276234240,
             transferInMintCallback: true,
-            transferInSwapCallback: false,
+            transferInSwapCallback: true,
             mintLiqudity: true
         });
         //provide liquidity
         (uint256 poolBalance0, uint256 poolBalance1) = setupTestCase(params);
 
-        uint256 expectedAmount0 = 0.998976618347425280 ether;
-        uint256 expectedAmount1 = 5000 ether;
+        uint256 expectedAmount0 = 0.998628802115141959 ether;
+        uint256 expectedAmount1 = 5000.209190920489524100 ether;
+
+        // uint256 expectedAmount0 = 0.998976618347425280 ether;
+        // uint256 expectedAmount1 = 5000 ether;
         assertEq(
             poolBalance0,
             expectedAmount0,
@@ -64,20 +67,28 @@ contract UnicloneV3PoolTest is Test, TestUtils {
             "incorrect token1 deposited amount"
         );
 
-        assertEq(token0.balanceOf(address(pool)), expectedAmount0);
-        assertEq(token1.balanceOf(address(pool)), expectedAmount1);
+        assertEq(
+            token0.balanceOf(address(pool)),
+            expectedAmount0,
+            "pool token0"
+        );
+        assertEq(
+            token1.balanceOf(address(pool)),
+            expectedAmount1,
+            "pool token1"
+        );
 
         bytes32 positionKey = keccak256(
             abi.encodePacked(address(this), params.lowerTick, params.upperTick)
         );
         uint128 posLiquidity = pool.positions(positionKey);
-        assertEq(posLiquidity, params.liquidity);
+        assertEq(posLiquidity, params.liquidity, "L pos");
 
         (bool tickInitialized, uint128 tickLiquidity) = pool.ticks(
             params.lowerTick
         );
         assertTrue(tickInitialized);
-        assertEq(tickLiquidity, params.liquidity);
+        assertEq(tickLiquidity, params.liquidity, "L tick");
 
         (tickInitialized, tickLiquidity) = pool.ticks(params.upperTick);
         assertTrue(tickInitialized);
@@ -178,7 +189,7 @@ contract UnicloneV3PoolTest is Test, TestUtils {
     function testSwapBuyEth() public {
         TestCaseParams memory params = TestCaseParams({
             wethBalance: 1 ether,
-            usdcBalance: 5000 ether,
+            usdcBalance: 5001 ether,
             currentTick: 85176,
             lowerTick: 84222,
             upperTick: 86129,
@@ -189,27 +200,32 @@ contract UnicloneV3PoolTest is Test, TestUtils {
             mintLiqudity: true
         });
         (uint256 poolBalance0, uint256 poolBalance1) = setupTestCase(params);
-        int256 userBalance0Before = int256(token0.balanceOf(address(this)));
+
         // get 42 ETH to swap
         // token1.mint(address(this), 42 ether);
         uint256 swapAmount = 42 ether; // 42 USDC
         token1.mint(address(this), swapAmount);
         token1.approve(address(this), swapAmount);
 
-        UnicloneV3Pool.CallbackData memory extra = UnicloneV3Pool.CallbackData({
-            token0: address(token0),
-            token1: address(token1),
-            payer: address(this)
-        });
+        int256 userBalance0Before = int256(token0.balanceOf(address(this)));
+        int256 userBalance1Before = int256(token1.balanceOf(address(this)));
+
+        bytes memory extra = encodeExtra(
+            address(token0),
+            address(token1),
+            address(this)
+        );
 
         // do the swap
         (int256 amount0Delta, int256 amount1Delta) = pool.swap(
             address(this),
-            abi.encode(extra)
+            false,
+            swapAmount,
+            extra
         );
 
         //check return of swap
-        assertEq(amount0Delta, -0.008396714242162444 ether, "invalid ETH out");
+        assertEq(amount0Delta, -0.008396714242162445 ether, "invalid ETH out");
         assertEq(amount1Delta, 42 ether, "invalid USDC in");
         //check token balance user
         assertEq(
@@ -219,7 +235,7 @@ contract UnicloneV3PoolTest is Test, TestUtils {
         );
         assertEq(
             token1.balanceOf(address(this)),
-            0,
+            uint256(userBalance1Before - amount1Delta),
             "invalid user USDC balance"
         );
         //check token balance pool
@@ -251,7 +267,7 @@ contract UnicloneV3PoolTest is Test, TestUtils {
     function testSwapInsufficientInputAmount() public {
         TestCaseParams memory params = TestCaseParams({
             wethBalance: 1 ether,
-            usdcBalance: 5000 ether,
+            usdcBalance: 5001 ether,
             currentTick: 85176,
             lowerTick: 84222,
             upperTick: 86129,
@@ -262,9 +278,19 @@ contract UnicloneV3PoolTest is Test, TestUtils {
             mintLiqudity: true
         });
         setupTestCase(params);
-
+        uint256 swapAmount = 42 ether; // 42 USDC
+        bytes memory extra = encodeExtra(
+            address(token0),
+            address(token1),
+            address(this)
+        );
         vm.expectRevert(encodeError("InsufficientInputAmount()"));
-        pool.swap(address(this), "");
+        (int256 amount0Delta, int256 amount1Delta) = pool.swap(
+            address(this),
+            false,
+            swapAmount,
+            extra
+        );
     }
 
     // ##########################  CALLBACK FUNCTION  ############################

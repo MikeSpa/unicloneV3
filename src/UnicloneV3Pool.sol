@@ -8,6 +8,9 @@ import "./interfaces/IUnicloneV3SwapCallback.sol";
 import "./lib/Position.sol";
 import "./lib/Tick.sol";
 import "./lib/TickBitmap.sol";
+import "./lib/TickMath.sol";
+import "./lib/Math.sol";
+import "./lib/SwapMath.sol";
 
 contract UnicloneV3Pool {
     using Tick for mapping(int24 => Tick.Info);
@@ -37,6 +40,21 @@ contract UnicloneV3Pool {
         address token0;
         address token1;
         address payer;
+    }
+
+    struct SwapState {
+        uint256 amountSpecifiedRemaining;
+        uint256 amountCalculated;
+        uint160 sqrtPriceX96;
+        int24 tick;
+    }
+
+    struct StepState {
+        uint160 sqrtPriceStartX96;
+        int24 nextTick;
+        uint160 sqrtPriceNextX96;
+        uint256 amountIn;
+        uint256 amountOut;
     }
 
     // Amount of liquidity, L.
@@ -102,8 +120,6 @@ contract UnicloneV3Pool {
         if (_amount == 0) revert ZeroLiquidity();
 
         // Update ticks and positions mappings
-        ticks.update(_lowerTick, _amount);
-        ticks.update(_upperTick, _amount);
 
         Position.Info storage position = positions.get(
             _owner,
@@ -112,10 +128,34 @@ contract UnicloneV3Pool {
         );
         position.update(_amount);
 
+        bool flippedLower = ticks.update(_lowerTick, _amount);
+        bool flippedUpper = ticks.update(_upperTick, _amount);
+
+        if (flippedLower) {
+            tickBitmap.flipTick(_lowerTick, 1);
+        }
+
+        if (flippedUpper) {
+            tickBitmap.flipTick(_upperTick, 1);
+        }
+
+        Slot0 memory slot0_ = slot0;
+
         // Calculate the amounts the user has to deposit
+        amount0 = Math.calcAmount0Delta(
+            slot0_.sqrtPriceX96,
+            TickMath.getSqrtRatioAtTick(_upperTick),
+            _amount
+        );
+
+        amount1 = Math.calcAmount1Delta(
+            slot0_.sqrtPriceX96,
+            TickMath.getSqrtRatioAtTick(_lowerTick),
+            _amount
+        );
         //hardcoded for now
-        amount0 = 0.998976618347425280 ether;
-        amount1 = 5000 ether;
+        // amount0 = 0.998976618347425280 ether;
+        // amount1 = 5000 ether;
 
         // Update liquidity
         liquidity += uint128(_amount);
@@ -151,38 +191,88 @@ contract UnicloneV3Pool {
     }
 
     // _recipient: the address that should recieve the token
-    function swap(address _recipient, bytes calldata data)
-        public
-        returns (int256 amount0, int256 amount1)
-    {
-        // Find target price and tick
-        //hardcoded for now
-        int24 nextTick = 85184;
-        uint160 nextPrice = 5604469350942327889444743441197;
+    function swap(
+        address recipient,
+        bool zeroForOne,
+        uint256 amountSpecified,
+        bytes calldata data
+    ) public returns (int256 amount0, int256 amount1) {
+        Slot0 memory slot0_ = slot0;
 
-        amount0 = -0.008396714242162444 ether;
-        amount1 = 42 ether;
+        SwapState memory state = SwapState({
+            amountSpecifiedRemaining: amountSpecified,
+            amountCalculated: 0,
+            sqrtPriceX96: slot0_.sqrtPriceX96,
+            tick: slot0_.tick
+        });
 
-        // Update tick and sqrtP
-        (slot0.tick, slot0.sqrtPriceX96) = (nextTick, nextPrice);
+        while (state.amountSpecifiedRemaining > 0) {
+            StepState memory step;
 
-        // Token exchange
-        IERC20(token0).transfer(_recipient, uint256(-amount0));
+            step.sqrtPriceStartX96 = state.sqrtPriceX96;
 
-        uint256 balance1Before = balance1();
-        IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
-            amount0,
-            amount1,
-            data
-        );
-        // check the pool balance is correct
-        if (balance1Before + uint256(amount1) > balance1())
-            revert InsufficientInputAmount();
+            (step.nextTick, ) = tickBitmap.nextInitializedTickWithinOneWord(
+                state.tick,
+                1,
+                zeroForOne
+            );
 
-        // Emit event
+            step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.nextTick);
+
+            (state.sqrtPriceX96, step.amountIn, step.amountOut) = SwapMath
+                .computeSwapStep(
+                    step.sqrtPriceStartX96,
+                    step.sqrtPriceNextX96,
+                    liquidity,
+                    state.amountSpecifiedRemaining
+                );
+
+            state.amountSpecifiedRemaining -= step.amountIn;
+            state.amountCalculated += step.amountOut;
+            state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
+        }
+
+        if (state.tick != slot0_.tick) {
+            (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
+        }
+
+        (amount0, amount1) = zeroForOne
+            ? (
+                int256(amountSpecified - state.amountSpecifiedRemaining),
+                -int256(state.amountCalculated)
+            )
+            : (
+                -int256(state.amountCalculated),
+                int256(amountSpecified - state.amountSpecifiedRemaining)
+            );
+
+        if (zeroForOne) {
+            IERC20(token1).transfer(recipient, uint256(-amount1));
+
+            uint256 balance0Before = balance0();
+            IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
+                amount0,
+                amount1,
+                data
+            );
+            if (balance0Before + uint256(amount0) > balance0())
+                revert InsufficientInputAmount();
+        } else {
+            IERC20(token0).transfer(recipient, uint256(-amount0));
+
+            uint256 balance1Before = balance1();
+            IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
+                amount0,
+                amount1,
+                data
+            );
+            if (balance1Before + uint256(amount1) > balance1())
+                revert InsufficientInputAmount();
+        }
+
         emit Swap(
             msg.sender,
-            _recipient,
+            recipient,
             amount0,
             amount1,
             slot0.sqrtPriceX96,
