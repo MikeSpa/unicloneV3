@@ -41,20 +41,20 @@ contract UnicloneV3Pool {
         address token1;
         address payer;
     }
-
+    // SwapState maintains current swap’s state.
     struct SwapState {
-        uint256 amountSpecifiedRemaining;
-        uint256 amountCalculated;
-        uint160 sqrtPriceX96;
-        int24 tick;
+        uint256 amountSpecifiedRemaining; // tracks the remaining amount of tokens that needs to be bought by the pool.
+        uint256 amountCalculated; // the out amount calculated by the contract.
+        uint160 sqrtPriceX96; // new current price after swap is done
+        int24 tick; // new current tick after swap is done
     }
-
+    //StepState maintains current swap step’s state. This structure tracks the state of one iteration of an “order filling”.
     struct StepState {
-        uint160 sqrtPriceStartX96;
-        int24 nextTick;
-        uint160 sqrtPriceNextX96;
-        uint256 amountIn;
-        uint256 amountOut;
+        uint160 sqrtPriceStartX96; // the price the iteration begins with
+        int24 nextTick; // the next initialized tick that will provide liquidity for the swap
+        uint160 sqrtPriceNextX96; // the price at the next tick.
+        uint256 amountIn; // amounts that can be provided by the liquidity of the current iteration.
+        uint256 amountOut; // amounts that can be provided by the liquidity of the current iteration.
     }
 
     // Amount of liquidity, L.
@@ -153,9 +153,6 @@ contract UnicloneV3Pool {
             TickMath.getSqrtRatioAtTick(_lowerTick),
             _amount
         );
-        //hardcoded for now
-        // amount0 = 0.998976618347425280 ether;
-        // amount1 = 5000 ether;
 
         // Update liquidity
         liquidity += uint128(_amount);
@@ -190,23 +187,29 @@ contract UnicloneV3Pool {
         );
     }
 
-    // _recipient: the address that should recieve the token
+    /// @param _recipient: the address that should recieve the token
+    /// @param _zeroForOne the flag that controls swap direction: when true, token0 is traded in for token1; when false, it’s the opposite.
+    /// @param _amountSpecified the amount of tokens user wants to sell.
     function swap(
-        address recipient,
-        bool zeroForOne,
-        uint256 amountSpecified,
-        bytes calldata data
+        address _recipient,
+        bool _zeroForOne,
+        uint256 _amountSpecified,
+        bytes calldata _data
     ) public returns (int256 amount0, int256 amount1) {
         Slot0 memory slot0_ = slot0;
 
+        //Before filling an order, we initialize a SwapState instance.
         SwapState memory state = SwapState({
-            amountSpecifiedRemaining: amountSpecified,
+            amountSpecifiedRemaining: _amountSpecified,
             amountCalculated: 0,
             sqrtPriceX96: slot0_.sqrtPriceX96,
             tick: slot0_.tick
         });
 
+        // We’ll loop until amountSpecifiedRemaining is 0, which will mean that the pool has enough liquidity to buy amountSpecified tokens from user.
         while (state.amountSpecifiedRemaining > 0) {
+            // we set up a price range that should provide liquidity for the swap. The range is from state.sqrtPriceX96 to step.sqrtPriceNextX96
+
             StepState memory step;
 
             step.sqrtPriceStartX96 = state.sqrtPriceX96;
@@ -214,10 +217,11 @@ contract UnicloneV3Pool {
             (step.nextTick, ) = tickBitmap.nextInitializedTickWithinOneWord(
                 state.tick,
                 1,
-                zeroForOne
+                _zeroForOne
             );
 
             step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.nextTick);
+            // calculating the amounts that can be provider by the current price range, and the new current price the swap will result in.
 
             (state.sqrtPriceX96, step.amountIn, step.amountOut) = SwapMath
                 .computeSwapStep(
@@ -226,45 +230,48 @@ contract UnicloneV3Pool {
                     liquidity,
                     state.amountSpecifiedRemaining
                 );
-
-            state.amountSpecifiedRemaining -= step.amountIn;
-            state.amountCalculated += step.amountOut;
+            //update SwapState
+            state.amountSpecifiedRemaining -= step.amountIn; // - amount of tokens the price range can buy from user
+            state.amountCalculated += step.amountOut; // + the related number of the other token the pool can sell to user
             state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
         }
 
+        // set new price and tick
         if (state.tick != slot0_.tick) {
             (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
         }
 
-        (amount0, amount1) = zeroForOne
+        // calculate swap amounts based on swap direction and the amounts calculated during the swap loop
+        (amount0, amount1) = _zeroForOne
             ? (
-                int256(amountSpecified - state.amountSpecifiedRemaining),
+                int256(_amountSpecified - state.amountSpecifiedRemaining),
                 -int256(state.amountCalculated)
             )
             : (
                 -int256(state.amountCalculated),
-                int256(amountSpecified - state.amountSpecifiedRemaining)
+                int256(_amountSpecified - state.amountSpecifiedRemaining)
             );
 
-        if (zeroForOne) {
-            IERC20(token1).transfer(recipient, uint256(-amount1));
+        // exchanging tokens with user, depending on swap direction
+        if (_zeroForOne) {
+            IERC20(token1).transfer(_recipient, uint256(-amount1));
 
             uint256 balance0Before = balance0();
             IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
                 amount0,
                 amount1,
-                data
+                _data
             );
             if (balance0Before + uint256(amount0) > balance0())
                 revert InsufficientInputAmount();
         } else {
-            IERC20(token0).transfer(recipient, uint256(-amount0));
+            IERC20(token0).transfer(_recipient, uint256(-amount0));
 
             uint256 balance1Before = balance1();
             IUnicloneV3SwapCallback(msg.sender).unicloneV3SwapCallback(
                 amount0,
                 amount1,
-                data
+                _data
             );
             if (balance1Before + uint256(amount1) > balance1())
                 revert InsufficientInputAmount();
@@ -272,7 +279,7 @@ contract UnicloneV3Pool {
 
         emit Swap(
             msg.sender,
-            recipient,
+            _recipient,
             amount0,
             amount1,
             slot0.sqrtPriceX96,

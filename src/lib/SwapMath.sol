@@ -4,6 +4,7 @@ pragma solidity ^0.8.14;
 import "./Math.sol";
 
 library SwapMath {
+    // calculates swap amounts within one price range and respecting available liquidity.
     function computeSwapStep(
         uint160 sqrtPriceCurrentX96,
         uint160 sqrtPriceTargetX96,
@@ -38,6 +39,7 @@ library SwapMath {
             liquidity
         );
 
+        //swap the amounts if the direction is opposite
         if (!zeroForOne) {
             (amountIn, amountOut) = (amountOut, amountIn);
         }
